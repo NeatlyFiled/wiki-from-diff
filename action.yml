@@ -1,0 +1,53 @@
+name: Neatlyfiled wiki from diff
+description: On each push, a Claude agent updates the Neatlyfiled wiki pages that document what the push changed, as one wiki revision.
+author: Neatlyfiled
+branding:
+  icon: book-open
+  color: blue
+
+inputs:
+  wiki-url:
+    description: The wiki's address, e.g. https://acme.neatlyfiled.com
+    required: true
+  wiki-token:
+    description: A write token for the wiki (awt_…), from Admin → Agent tokens
+    required: true
+  anthropic-api-key:
+    description: Your Anthropic API key; the agent's model usage is billed to it
+    required: true
+  model:
+    description: The Claude model the agent uses (default in src/agent.ts)
+    required: false
+    default: ''
+  folder:
+    description: Where this repository's pages live in the wiki (e.g. "engineering/api"); new pages go there
+    required: false
+    default: ''
+  instructions:
+    description: Extra guidance for the agent, e.g. which pages to keep current or what to leave alone
+    required: false
+    default: ''
+  ignore:
+    description: Globs (one per line or comma-separated) of files to leave out of the diff, on top of lockfiles, build output, minified, vendored, generated and binary files
+    required: false
+    default: ''
+  max-diff-bytes:
+    description: Most bytes of diff shown to the agent; larger diffs are cut per file, with a note
+    required: false
+    default: '120000'
+  dry-run:
+    description: '"true" runs the agent and prints the planned changes without saving them'
+    required: false
+    default: 'false'
+
+outputs:
+  revision:
+    description: The wiki revision saved for this push (empty if none)
+  pages:
+    description: The wiki pages changed, one path per line
+  skipped:
+    description: Why no revision was saved, if none was ("dry-run", no documentable changes, [skip wiki], nothing to update)
+
+runs:
+  using: node24
+  main: src/main.ts
