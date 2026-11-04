@@ -108,3 +108,17 @@ usage, are listed under Admin → Connected repositories.
 - **`locked` (402)**: the wiki's trial or subscription has ended.
 - The action waits up to 10 minutes for a run; a longer run still finishes in
   the wiki.
+
+## Releasing
+
+The action's source lives in the `agent-wiki` monorepo under
+`actions/wiki-from-diff/`; customers use the public copy at
+[`NeatlyFiled/wiki-from-diff`](https://github.com/NeatlyFiled/wiki-from-diff).
+To publish a change, from the monorepo root:
+
+```sh
+git subtree split --prefix actions/wiki-from-diff -b wiki-from-diff-release
+git push git@github.com:NeatlyFiled/wiki-from-diff.git wiki-from-diff-release:main
+git push -f git@github.com:NeatlyFiled/wiki-from-diff.git wiki-from-diff-release:refs/tags/v1   # move v1; also tag v1.x.y
+git branch -D wiki-from-diff-release
+```
