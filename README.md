@@ -1,19 +1,27 @@
 # wiki-from-diff
 
-A GitHub Action that keeps your [Neatlyfiled](https://neatlyfiled.com) wiki in
-step with your code. On each push it sends the push's diff to your wiki, whose
-agent reads the wiki, updates the pages that document what changed (APIs,
-configuration, architecture, data models, runbooks) and saves all of its edits
-as **one wiki revision per push**, linked to the commit.
+A GitHub Action that connects a repository to your
+[Neatlyfiled](https://neatlyfiled.com) wiki, the shared context your agents and
+your people work from. It does two things on each push, with no secrets and no
+model on our side:
+
+1. **Records the push** as a wiki page: the commits, a table of the files
+   changed and the diff per file, with links to the commit (or comparison) on
+   GitHub. Pages live under `changes/<repository>/<year>/<month>/`, and
+   `changes/<repository>/` lists the latest 50, newest first. Any agent or
+   person can read what changed without access to the code.
+2. **Lets your agent in.** It hands the job a short-lived write token for the
+   wiki (an hour), with its MCP and API addresses, so the next step can run
+   **your own agent with your own model and key** to update the docs: in
+   Neatlyfiled, CI is just another flow for agents.
 
 - **No secrets.** The job proves which repository it runs in with GitHub's
-  OIDC token; your wiki accepts pushes only from repositories an admin has
-  connected. There is no wiki token or model key to store.
-- The agent prefers section edits, keeps each page's style, creates pages only
-  for genuinely new concepts, and makes no edits when nothing needs updating.
-- Edits are saved together at the end, so a failed run leaves the wiki
-  untouched, and re-running a job never writes twice: the revision is keyed to
-  the commit, and a documented push is not sent to the model again.
+  OIDC token; your wiki accepts only repositories an admin has connected.
+  There is no wiki token to store.
+- **Re-runs never write twice**: a push's page is keyed to the commit.
+- The token works only on your wiki, only while the repository stays
+  connected, and only for an hour. Its changes show in the wiki's history as
+  `ci:<owner/repo>`.
 
 ## Setup
 
@@ -23,8 +31,8 @@ as **one wiki revision per push**, linked to the commit.
 2. Add the workflow:
 
 ```yaml
-# .github/workflows/wiki.yml
-name: Wiki docs
+# .github/workflows/neatlyfiled-wiki.yml
+name: Wiki
 on:
   push:
     branches: [main]
@@ -39,20 +47,77 @@ jobs:
         with:
           fetch-depth: 0 # the action diffs the push, so it needs the history
       - uses: neatlyfiled/wiki-from-diff@v1
+        id: wiki
         with:
           wiki: acme # your subdomain, or the wiki's full https address
 ```
+
+That records every push. To have your agent update the docs too, add a step.
+
+## Let your agent update the docs
+
+The step's outputs are all your agent needs: `token`, `mcp-url` and
+`api-url`, plus `page`, the path of the push's page (its context).
+
+### Claude Code
+
+With [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action)
+and your `ANTHROPIC_API_KEY` in the repository's secrets, after the step above:
+
+```yaml
+      - uses: anthropics/claude-code-action@v1
+        if: steps.wiki.outputs.skipped == ''
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          prompt: |
+            Commit ${{ github.sha }} was pushed to ${{ github.repository }}. The wiki
+            (MCP server "wiki") has a page about it at ${{ steps.wiki.outputs.page }}
+            with the commits and the diff; the code is checked out here.
+            Read that page, search the wiki for the pages that document what
+            changed (APIs, configuration, architecture, runbooks), and update
+            them. Prefer edit_section; send the revision you read as base when
+            you replace a page. If nothing needs updating, change nothing.
+          claude_args: |
+            --mcp-config '{"mcpServers":{"wiki":{"type":"http","url":"${{ steps.wiki.outputs.mcp-url }}","headers":{"Authorization":"Bearer ${{ steps.wiki.outputs.token }}"}}}}'
+            --allowedTools mcp__wiki
+```
+
+`mcp__wiki` allows every tool of the wiki's MCP server (`search`,
+`read_page`, `edit_section`, `write_page`, …); list single tools instead to
+narrow it, e.g. `mcp__wiki__search,mcp__wiki__read_page,mcp__wiki__edit_section`.
+
+### Any agent, or a script
+
+Any MCP client takes the wiki at `steps.wiki.outputs.mcp-url` (streamable
+HTTP) with the header `Authorization: Bearer <token>`. Without MCP, the JSON
+API at `steps.wiki.outputs.api-url` takes the same header:
+
+```yaml
+      - name: Read the push's page and append to the changelog
+        env:
+          WIKI_API: ${{ steps.wiki.outputs.api-url }}
+          WIKI_TOKEN: ${{ steps.wiki.outputs.token }}
+          PAGE: ${{ steps.wiki.outputs.page }}
+        run: |
+          curl -fsS -H "Authorization: Bearer $WIKI_TOKEN" "$WIKI_API/pages/$PAGE" | jq -r .content
+          curl -fsS -X PATCH -H "Authorization: Bearer $WIKI_TOKEN" -H 'content-type: application/json' \
+            -d "{\"section\": \"Changes\", \"mode\": \"append\", \"content\": \"- ${GITHUB_SHA::7}: see [the push](/$PAGE)\", \"message\": \"Changelog for ${GITHUB_SHA::7}\"}" \
+            "$WIKI_API/pages/engineering/changelog.md"
+```
+
+The API's routes and MCP tools are listed in the wiki's docs
+(`/llms.txt` on your wiki lists its pages).
 
 ## Inputs
 
 | Input | Default | Does |
 | --- | --- | --- |
 | `wiki` | required | Your wiki: its subdomain (`acme` for `https://acme.neatlyfiled.com`) or its address |
-| `folder` | | Where this repository's pages live; the agent looks there first and puts new pages there |
-| `instructions` | | Extra guidance for the agent, e.g. "keep docs/runbooks/ current; never edit the changelog" |
-| `ignore` | | Globs (one per line or comma-separated) to leave out of the diff, on top of the built-in ones: lockfiles, `dist/`, `build/`, `out/`, `coverage/`, `vendor/`, `node_modules/`, minified, source maps, snapshots, generated code and binary files |
-| `max-diff-bytes` | `120000` | Most bytes of diff sent; bigger diffs are cut per file (small files stay whole) with a note of what was cut |
-| `dry-run` | `false` | `true` runs the agent and prints the planned revision without saving it |
+| `record` | `true` | `false` skips recording the push; the step only gets the token |
+| `folder` | `changes/<repository name>` | Wiki folder for this repository's push pages |
+| `ignore` | | Globs (one per line or comma-separated) to leave out of the diff, on top of the built-in ones: lockfiles, `dist/`, `build/`, `out/`, `coverage/`, `vendor/`, `node_modules/`, minified, source maps, snapshots, generated code and binary files. Left-out files are still listed |
+| `max-diff-bytes` | `120000` | Most bytes of diff sent; bigger diffs are cut per file (small files stay whole), and the page says so |
 
 Globs work like `.gitignore`: `docs/` matches a folder anywhere, `*.svg` a file
 name anywhere, `api/legacy/**` a path from the repository root.
@@ -61,14 +126,15 @@ name anywhere, `api/legacy/**` a path from the repository root.
 
 | Output | Is |
 | --- | --- |
-| `revision` | The wiki revision saved for this push (empty if none) |
-| `pages` | The pages changed, one path per line |
-| `skipped` | Why no revision was saved, if none was: `dry-run`, no documentable changes, a `[skip wiki]` commit, or nothing to update |
+| `token` | A write token for the wiki, valid for an hour (masked in logs) |
+| `mcp-url` | The wiki's MCP server, e.g. `https://acme.neatlyfiled.com/mcp` |
+| `api-url` | The wiki's JSON API, e.g. `https://acme.neatlyfiled.com/api` |
+| `wiki-url` | The wiki's address |
+| `page` | The push's page, e.g. `changes/api/2026/11/2026-11-04-abc1234.md` (when recorded) |
+| `revision` | The wiki revision that recorded it (when recorded) |
+| `skipped` | Why the push was not recorded, if a commit message has `[skip wiki]` |
 
-Each run also prints the agent's summary and writes a job summary with the
-changed pages and a link to the revision, or why it skipped.
-
-## What gets documented
+## What gets recorded
 
 - **A push** to an existing branch: the commits between the old and the new
   head.
@@ -77,21 +143,17 @@ changed pages and a link to the revision, or why it skipped.
 - **`workflow_dispatch`**: the last commit.
 
 The wiki gets the commit messages, the list of changed files and the diff, not
-the rest of your code, so the agent documents only what the diff shows.
+the rest of your code. Put `[skip wiki]` in any commit message to leave a push
+out (the token is still issued). `[skip ci]` skips the whole workflow, as
+usual.
 
-## Skipping a push
+## Limits
 
-Put `[skip wiki]` in any commit message of the push. The action then stops
-before sending anything. (`[skip ci]` skips the whole workflow, as usual.)
-
-## Usage and limits
-
-The agent's model usage is included in your Neatlyfiled plan. Each wiki takes
-a limited number of CI runs a day (50 by default); pushes skipped with
-`[skip wiki]`, pushes that change only ignored files and re-runs of a
-documented push do not count. A locked wiki (trial or subscription ended)
-refuses runs until it is renewed. Recent runs, with their outcome and token
-usage, are listed under Admin → Connected repositories.
+Each wiki records up to 120 pushes and issues up to 120 CI tokens an hour;
+re-runs of a recorded push do not count. A token's API and MCP calls count
+toward the wiki's usual API limits. A locked wiki (trial or subscription
+ended) refuses new pushes until it is renewed. Recent pushes and tokens are
+listed under Admin → Connected repositories.
 
 ## Errors
 
@@ -100,14 +162,10 @@ usage, are listed under Admin → Connected repositories.
 - **Missing commits**: check out with `fetch-depth: 0`.
 - **`repository_not_connected` (403)**: connect the repository in the wiki's
   admin page (the name must match `owner/repo`).
-- **Broken links** in the agent's pages: the agent gets the wiki's list once to
-  fix them before saving.
-- **Conflict**: someone edited the same lines while the agent worked; re-run
-  the job.
-- **`rate_limited` (429)**: the wiki's daily CI runs are used up.
+- **`invalid_token` (401) in your agent's step**: the token expired (an hour),
+  or the repository was disconnected; re-run the job.
+- **`rate_limited` (429)**: the wiki's hourly pushes or tokens are used up.
 - **`locked` (402)**: the wiki's trial or subscription has ended.
-- The action waits up to 10 minutes for a run; a longer run still finishes in
-  the wiki.
 
 ## Releasing
 

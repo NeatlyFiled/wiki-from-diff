@@ -1,5 +1,5 @@
 name: Neatlyfiled wiki from diff
-description: On each push, the Neatlyfiled wiki's agent updates the pages that document what the push changed, as one wiki revision. No secrets needed.
+description: Records each push in your Neatlyfiled wiki (commits, files, diff) and hands the job a short-lived wiki token for your own agent. No secrets, no model.
 author: Neatlyfiled
 branding:
   icon: book-open
@@ -9,12 +9,12 @@ inputs:
   wiki:
     description: Your wiki's subdomain (acme for https://acme.neatlyfiled.com) or its full https address
     required: true
-  folder:
-    description: Where this repository's pages live in the wiki (e.g. "engineering/api"); new pages go there
+  record:
+    description: '"true" records the push as a wiki page; "false" only gets the token'
     required: false
-    default: ''
-  instructions:
-    description: Extra guidance for the agent, e.g. which pages to keep current or what to leave alone
+    default: 'true'
+  folder:
+    description: Wiki folder for this repository's push pages (default "changes/<repository name>")
     required: false
     default: ''
   ignore:
@@ -22,21 +22,25 @@ inputs:
     required: false
     default: ''
   max-diff-bytes:
-    description: Most bytes of diff sent to the agent; larger diffs are cut per file, with a note
+    description: Most bytes of diff sent; larger diffs are cut per file, with a note
     required: false
     default: '120000'
-  dry-run:
-    description: '"true" runs the agent and prints the planned changes without saving them'
-    required: false
-    default: 'false'
 
 outputs:
+  token:
+    description: A write token for the wiki, valid for an hour (masked in logs); send it as "Authorization Bearer <token>"
+  mcp-url:
+    description: The wiki's MCP server (streamable HTTP)
+  api-url:
+    description: The wiki's JSON API
+  wiki-url:
+    description: The wiki's address
+  page:
+    description: The push's page in the wiki, e.g. changes/api/2026/11/2026-11-04-abc1234.md (when recorded)
   revision:
-    description: The wiki revision saved for this push (empty if none)
-  pages:
-    description: The wiki pages changed, one path per line
+    description: The wiki revision that recorded the push (when recorded)
   skipped:
-    description: Why no revision was saved, if none was ("dry-run", no documentable changes, [skip wiki], nothing to update)
+    description: Why the push was not recorded, if a commit message contains [skip wiki]
 
 runs:
   using: node24

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { BUILTIN_IGNORES, collect, EMPTY_TREE, fitDiffs, ignored, pickRange, runPayload, type History } from '../src/diff.ts';
+import { BUILTIN_IGNORES, collect, EMPTY_TREE, fitDiffs, ignored, pickRange, pushPayload, type History } from '../src/diff.ts';
 
 const ZERO = '0'.repeat(40);
 
@@ -47,7 +47,7 @@ test('missing commits fail with a hint about fetch-depth', () => {
   assert.throws(() => pickRange('workflow_dispatch', {}, 'x', history({ x: undefined }, { shallow: true })), /fetch-depth: 0/);
 });
 
-test('other events document the last commit', () => {
+test('other events cover the last commit', () => {
   assert.deepEqual(pickRange('workflow_dispatch', {}, 'b', history({ a: undefined, b: 'a' })), { base: 'a', head: 'b', note: undefined });
 });
 
@@ -63,44 +63,60 @@ test('fitDiffs keeps small diffs whole and cuts big ones at a line end', () => {
   const line = (n: number) => `+line ${String(n).padStart(4, '0')}\n`;
   const big = Array.from({ length: 500 }, (_, i) => line(i)).join('');
   const files = [
-    { path: 'small.ts', added: 1, deleted: 0, diff: '+tiny\n' },
-    { path: 'big.ts', added: 500, deleted: 0, diff: big },
-    { path: 'huge.ts', added: 500, deleted: 0, diff: big + big },
+    { path: 'small.ts', status: 'modified', added: 1, deleted: 0, diff: '+tiny\n' },
+    { path: 'big.ts', status: 'added', added: 500, deleted: 0, diff: big },
+    { path: 'huge.ts', status: 'added', added: 500, deleted: 0, diff: big + big },
   ];
   const { text, cut } = fitDiffs(files, 4000);
-  assert.ok(Buffer.byteLength(text) < 4400, `${Buffer.byteLength(text)} bytes`);
+  assert.ok(Buffer.byteLength(text) <= 4000, `${Buffer.byteLength(text)} bytes`);
   assert.ok(text.startsWith('+tiny\n'));
-  assert.match(text, /\+line \d{4}\n\[… big\.ts truncated: kept \d+ of 5500 bytes\]/);
-  assert.deepEqual(cut.map((entry) => entry.split(' ')[0]), ['big.ts', 'huge.ts']);
-  // Too little room for a useful piece: the file is left out, with a note.
+  assert.ok(text.endsWith('\n'));
+  assert.deepEqual(cut.map((entry) => [entry.path, entry.how]), [['big.ts', 'truncated'], ['huge.ts', 'truncated']]);
+  assert.match(cut[0].note, /^big\.ts \(kept \d+ of 5500 bytes\)$/);
+  // Too little room for a useful piece: the file is left out.
   const tight = fitDiffs(files, 600);
-  assert.deepEqual(tight.cut, ['big.ts (left out)', 'huge.ts (left out)']);
+  assert.deepEqual(tight.cut.map((entry) => entry.how), ['omitted', 'omitted']);
+  assert.equal(tight.text, '+tiny\n');
 });
 
-test('collect a real repository and build the run payload: ignored and binary files are listed, not diffed', (t) => {
+test('collect a real repository and build the push payload: statuses, dates, ignored and binary files listed, not diffed', (t) => {
   const dir = mkdtempSync(path.join(tmpdir(), 'wfd-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@x', ...args], { cwd: dir, encoding: 'utf8' }).trim();
   git('init', '-q');
   writeFileSync(path.join(dir, 'api.ts'), 'export const a = 1;\n');
+  writeFileSync(path.join(dir, 'old.ts'), 'gone\n');
   git('add', '.');
   git('commit', '-qm', 'first');
   const base = git('rev-parse', 'HEAD');
   writeFileSync(path.join(dir, 'api.ts'), 'export const a = 2;\n');
+  writeFileSync(path.join(dir, 'new.ts'), 'export const b = 1;\n');
   writeFileSync(path.join(dir, 'package-lock.json'), '{}\n');
   writeFileSync(path.join(dir, 'logo.png'), Buffer.from([0, 1, 2, 0, 255]));
+  git('rm', '-q', 'old.ts');
   git('add', '.');
   git('commit', '-qm', 'Bump a\n\nBecause.');
   const head = git('rev-parse', 'HEAD');
   const change = collect(dir, { base, head }, BUILTIN_IGNORES);
   assert.deepEqual(change.commits.map((commit) => commit.message), ['Bump a\n\nBecause.']);
-  assert.deepEqual(change.files.map((file) => [file.path, file.added, file.deleted]), [['api.ts', 1, 1]]);
-  assert.deepEqual(change.skipped, [{ path: 'logo.png', reason: 'binary' }, { path: 'package-lock.json', reason: 'ignored' }]);
-  const payload = runPayload(change, 120_000);
+  assert.match(change.commits[0].date, /^\d{4}-\d{2}-\d{2}T/);
+  assert.deepEqual(change.files.map((file) => [file.path, file.status, file.added, file.deleted]), [['api.ts', 'modified', 1, 1], ['new.ts', 'added', 1, 0], ['old.ts', 'deleted', 0, 1]]);
+  assert.deepEqual(change.skipped, [{ path: 'logo.png', status: 'added', reason: 'binary' }, { path: 'package-lock.json', status: 'added', reason: 'ignored' }]);
+  const payload = pushPayload(change, 120_000);
   assert.equal(payload.sha, head);
+  assert.equal(payload.before, base);
   assert.equal(payload.note, `since ${base.slice(0, 7)}`);
-  assert.deepEqual(payload.files, [{ path: 'api.ts', added: 1, deleted: 1 }, { path: 'logo.png', skipped: 'binary' }, { path: 'package-lock.json', skipped: 'ignored' }]);
-  assert.match(payload.diff, /\+export const a = 2;/);
+  assert.deepEqual(payload.files, [
+    { path: 'api.ts', status: 'modified', added: 1, deleted: 1, cut: undefined },
+    { path: 'new.ts', status: 'added', added: 1, deleted: 0, cut: undefined },
+    { path: 'old.ts', status: 'deleted', added: 0, deleted: 1, cut: undefined },
+    { path: 'logo.png', status: 'added', skipped: 'binary' },
+    { path: 'package-lock.json', status: 'added', skipped: 'ignored' },
+  ]);
+  assert.match(payload.diff, /^diff --git a\/api\.ts b\/api\.ts\n[^]*\+export const a = 2;/);
+  assert.equal(payload.diff.match(/^diff --git /gm)?.length, 3);
   assert.doesNotMatch(payload.diff, /\{\}/);
+  assert.equal(payload.truncated, false);
   assert.deepEqual(payload.cut, []);
+  assert.equal(pushPayload({ ...change, range: { base: EMPTY_TREE, head } }, 120_000).before, undefined);
 });

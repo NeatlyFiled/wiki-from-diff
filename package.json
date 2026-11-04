@@ -2,7 +2,7 @@
   "name": "@agent-wiki/wiki-from-diff",
   "version": "0.1.0",
   "private": true,
-  "description": "GitHub Action: a Neatlyfiled wiki documents each push, authenticated by GitHub OIDC. No dependencies: GitHub runs src/main.ts as is.",
+  "description": "GitHub Action: records each push in a Neatlyfiled wiki and hands the job a short-lived wiki token for its own agent, authenticated by GitHub OIDC. No dependencies: GitHub runs src/main.ts as is.",
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit && npm test",

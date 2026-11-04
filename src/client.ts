@@ -1,11 +1,9 @@
 // The wiki's CI endpoints, from the workflow's side: which wiki, the GitHub
-// OIDC token that proves which repository is asking, and the run to start and
-// poll. The wiki runs the agent; the repository holds no keys.
+// OIDC token that proves which repository is asking, recording the push and
+// getting a CI token for the job's own agent. The repository holds no keys.
 
 /** A bare `wiki` input is a subdomain of this. */
 export const DOMAIN = 'neatlyfiled.com';
-/** How long to wait for a run before giving up on it (the wiki still finishes it). */
-export const RUN_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** `acme` -> `https://acme.neatlyfiled.com`; a full address is kept (https, or http on localhost for testing). */
 export function wikiOrigin(input: string): string {
@@ -48,28 +46,16 @@ export async function oidcToken(audience: string, env: Record<string, string | u
   return value;
 }
 
-export type Run = {
-  id: string;
-  status: 'running' | 'saved' | 'unchanged' | 'planned' | 'failed';
-  summary?: string;
-  revision?: number;
-  revisionUrl?: string;
-  repeated?: boolean;
-  pages?: string[];
-  moves?: [string, string][];
-  plan?: unknown;
-  error?: { code: string; message: string };
-  usage?: { inputTokens: number; outputTokens: number };
-};
+/** `POST /api/ci/pushes`'s answer. */
+export type Recorded = { revision: number; page: string; url: string; repeated: boolean };
+/** `POST /api/ci/token`'s answer. */
+export type CiToken = { token: string; expires_at: string; mcp_url: string; api_url: string; wiki_url: string };
 
 export type ClientOptions = {
   origin: string;
-  /** A fresh OIDC token for each request: they last minutes, runs can take longer. */
+  /** A fresh OIDC token for each request. */
   token: () => Promise<string>;
   fetch?: typeof fetch;
-  sleep?: (ms: number) => Promise<void>;
-  now?: () => number;
-  log?: (line: string) => void;
 };
 
 export class CiClient {
@@ -79,11 +65,11 @@ export class CiClient {
     this.#options = options;
   }
 
-  async #request(method: string, route: string, body?: unknown): Promise<Run> {
+  async #post<T>(route: string, body: unknown): Promise<T> {
     const response = await (this.#options.fetch ?? fetch)(`${this.#options.origin}${route}`, {
-      method,
-      headers: { authorization: `Bearer ${await this.#options.token()}`, accept: 'application/json', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      method: 'POST',
+      headers: { authorization: `Bearer ${await this.#options.token()}`, accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify(body),
     });
     const text = await response.text();
     let data: unknown;
@@ -92,38 +78,18 @@ export class CiClient {
     } catch {
       data = undefined;
     }
-    if (response.ok && data) return data as Run;
+    if (response.ok && data) return data as T;
     const error = (data as { error?: { code?: string; message?: string } } | undefined)?.error; // the wiki's error shape
-    throw new ApiError(response.status, error?.code ?? 'http_error', error?.message ?? `${method} ${route} answered ${response.status}: ${text.slice(0, 300)}`);
+    throw new ApiError(response.status, error?.code ?? 'http_error', error?.message ?? `POST ${route} answered ${response.status}: ${text.slice(0, 300)}`);
   }
 
-  /** Starts documenting the push, or returns the run (or revision) the wiki already has for it. */
-  start(payload: unknown): Promise<Run> {
-    return this.#request('POST', '/api/ci/runs', payload);
+  /** Records the push as a wiki page, or returns the page an earlier run recorded. */
+  record(push: unknown): Promise<Recorded> {
+    return this.#post('/api/ci/pushes', push);
   }
 
-  /** Polls until the run is done, backing off from 2 to 15 seconds; network and 5xx hiccups are retried. */
-  async wait(run: Run, timeoutMs = RUN_TIMEOUT_MS): Promise<Run> {
-    const { sleep = defaultSleep, now = Date.now, log = () => {} } = this.#options;
-    const deadline = now() + timeoutMs;
-    let delay = 2000;
-    while (run.status === 'running') {
-      if (now() >= deadline) throw new Error(`the run was still going after ${Math.round(timeoutMs / 60_000)} minutes; the wiki finishes it on its own (see Admin → Connected repositories)`);
-      await sleep(delay);
-      delay = Math.min(delay * 1.5, 15_000);
-      try {
-        run = await this.#request('GET', `/api/ci/runs/${encodeURIComponent(run.id)}`);
-      } catch (error) {
-        if (error instanceof ApiError && error.status < 500 && error.status !== 429) throw error;
-        log(`polling failed (${error instanceof Error ? error.message : String(error)}); retrying`);
-      }
-    }
-    return run;
+  /** A short-lived write token for this wiki, with its MCP and API addresses. */
+  ciToken(): Promise<CiToken> {
+    return this.#post('/api/ci/token', {});
   }
-}
-
-function defaultSleep(ms: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, ms);
-  return promise;
 }
