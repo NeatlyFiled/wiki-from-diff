@@ -25,6 +25,10 @@ inputs:
     description: Most bytes of diff sent; larger diffs are cut per file, with a note
     required: false
     default: '120000'
+  write-paths:
+    description: Wiki folders the token may change, as path globs (one per line or comma-separated, e.g. "docs/**"); empty means the whole wiki. Recording the push is not affected
+    required: false
+    default: ''
 
 outputs:
   token:

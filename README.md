@@ -119,6 +119,7 @@ The API's routes and MCP tools are listed in the wiki's docs
 | `folder` | `changes/<repository name>` | Wiki folder for this repository's push pages |
 | `ignore` | | Globs (one per line or comma-separated) to leave out of the diff, on top of the built-in ones: lockfiles, `dist/`, `build/`, `out/`, `coverage/`, `vendor/`, `node_modules/`, minified, source maps, snapshots, generated code and binary files. Left-out files are still listed |
 | `max-diff-bytes` | `120000` | Most bytes of diff sent; bigger diffs are cut per file (small files stay whole), and the page says so |
+| `write-paths` | | Wiki folders the token may change, as path globs from the wiki's root (one per line or comma-separated): `docs/**`, `engineering/api.md`. The agent's writes elsewhere fail with `403 outside_scope`. Empty means the whole wiki. Recording the push is not affected |
 
 Globs work like `.gitignore`: `docs/` matches a folder anywhere, `*.svg` a file
 name anywhere, `api/legacy/**` a path from the repository root.

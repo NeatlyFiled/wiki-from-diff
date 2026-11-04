@@ -72,7 +72,17 @@ async function record(client: CiClient, maxBytes: number): Promise<string> {
   console.log(`${recorded.repeated ? 'Already recorded' : 'Recorded'} as ${recorded.page} (revision ${recorded.revision}): ${recorded.url}`);
   setOutput('page', recorded.page);
   setOutput('revision', String(recorded.revision));
-  return `Push ${recorded.repeated ? 'already recorded' : 'recorded'}: [${recorded.page}](${recorded.url}) (revision ${recorded.revision}).`;
+  const lines = [`Push ${recorded.repeated ? 'already recorded' : 'recorded'}: [${recorded.page}](${recorded.url}) (revision ${recorded.revision}).`];
+  const stale = recorded.stale ?? [];
+  if (stale.length) {
+    console.log(`${stale.length} page(s) may need updating: ${stale.map((page) => page.path).join(', ')}`);
+    lines.push('', 'Pages that may need updating (their `covers:` match files this push changed):', '');
+    for (const page of stale) {
+      const files = page.files.slice(0, 5).map((file) => `\`${file.replace(/`/g, "'")}\``).join(', ');
+      lines.push(`- [${page.title.replace(/[[\]\\]/g, '\\$&')}](${page.url}): ${files}${page.files.length > 5 ? `, and ${page.files.length - 5} more` : ''}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 async function main(): Promise<void> {
@@ -93,14 +103,15 @@ async function main(): Promise<void> {
   });
   const lines = [recording ? await record(client, maxBytes) : 'Push not recorded ("record" is false).'];
 
-  const minted = await client.ciToken();
+  const minted = await client.ciToken(splitList(input('write-paths')));
   console.log(`::add-mask::${minted.token}`);
   setOutput('token', minted.token);
   setOutput('mcp-url', minted.mcp_url);
   setOutput('api-url', minted.api_url);
   setOutput('wiki-url', minted.wiki_url);
   console.log(`CI token for ${minted.wiki_url} issued, valid until ${minted.expires_at}: use steps.<id>.outputs.token with ${minted.mcp_url} or ${minted.api_url}`);
-  lines.push(`CI token issued for later steps, valid until ${minted.expires_at}.`);
+  const scope = minted.write_paths?.length ? `, limited to writing ${minted.write_paths.map((pattern) => `\`${pattern}\``).join(', ')}` : '';
+  lines.push(`CI token issued for later steps, valid until ${minted.expires_at}${scope}.`);
   summarize(`### Neatlyfiled wiki\n\n${lines.join('\n\n')}`);
 }
 

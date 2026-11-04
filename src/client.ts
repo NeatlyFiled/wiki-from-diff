@@ -46,10 +46,10 @@ export async function oidcToken(audience: string, env: Record<string, string | u
   return value;
 }
 
-/** `POST /api/ci/pushes`'s answer. */
-export type Recorded = { revision: number; page: string; url: string; repeated: boolean };
-/** `POST /api/ci/token`'s answer. */
-export type CiToken = { token: string; expires_at: string; mcp_url: string; api_url: string; wiki_url: string };
+/** `POST /api/ci/pushes`'s answer; `stale`: pages whose frontmatter `covers:` matched files the push changed (older wikis leave it out). */
+export type Recorded = { revision: number; page: string; url: string; repeated: boolean; stale?: { path: string; title: string; url: string; files: string[] }[] };
+/** `POST /api/ci/token`'s answer; `write_paths` echoes the folders the token is limited to. */
+export type CiToken = { token: string; expires_at: string; write_paths?: string[]; mcp_url: string; api_url: string; wiki_url: string };
 
 export type ClientOptions = {
   origin: string;
@@ -88,8 +88,8 @@ export class CiClient {
     return this.#post('/api/ci/pushes', push);
   }
 
-  /** A short-lived write token for this wiki, with its MCP and API addresses. */
-  ciToken(): Promise<CiToken> {
-    return this.#post('/api/ci/token', {});
+  /** A short-lived write token for this wiki, with its MCP and API addresses; `writePaths` limits where it may write. */
+  ciToken(writePaths: string[] = []): Promise<CiToken> {
+    return this.#post('/api/ci/token', writePaths.length ? { write_paths: writePaths } : {});
   }
 }
