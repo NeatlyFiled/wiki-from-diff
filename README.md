@@ -25,8 +25,9 @@ model on our side:
 
 ## Setup
 
-1. In the wiki, open **Admin → Connected repositories** and add your
-   repository (`owner/repo`). The page shows this workflow with your wiki
+1. In the wiki, open **Admin → Integrations**: connect GitHub and tick the
+   repository (which can also open a pull request adding this workflow), or
+   add it by name (`owner/repo`). The page shows this workflow with your wiki
    filled in.
 2. Add the workflow:
 
@@ -153,7 +154,7 @@ Each wiki records up to 120 pushes and issues up to 120 CI tokens an hour;
 re-runs of a recorded push do not count. A token's API and MCP calls count
 toward the wiki's usual API limits. A locked wiki (trial or subscription
 ended) refuses new pushes until it is renewed. Recent pushes and tokens are
-listed under Admin → Connected repositories.
+listed under Admin → Integrations.
 
 ## Errors
 
