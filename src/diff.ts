@@ -203,25 +203,23 @@ export function collect(cwd: string, range: Range, ignore: string[]): Change {
   return { range, commits, files, skipped };
 }
 
-/** The change as one Markdown-ish text of at most about `maxBytes`. */
-export function describe(change: Change, maxBytes: number): { text: string; cut: string[] } {
-  const commits = change.commits.map((commit) => `- ${commit.sha.slice(0, 7)} (${commit.author}) ${commit.message.replace(/\n/g, '\n  ')}`);
-  const files = change.files.map((file) => `- ${file.path} (+${file.added} −${file.deleted})`);
-  const skipped = change.skipped.map((file) => `- ${file.path} (${file.reason}, diff not shown)`);
-  const header = [
-    `Comparing ${change.range.base === EMPTY_TREE ? 'the empty tree' : change.range.base.slice(0, 7)}..${change.range.head.slice(0, 7)}${change.range.note ? ` (${change.range.note})` : ''}`,
-    '',
-    `## Commits${change.commits.length >= MAX_COMMITS ? ` (latest ${MAX_COMMITS})` : ''}`,
-    ...commits,
-    '',
-    '## Files',
-    ...files,
-    ...skipped,
-    '',
-    '## Diff',
-    '',
-  ].join('\n');
-  const { text, cut } = fitDiffs(change.files, Math.max(maxBytes - Buffer.byteLength(header), MIN_FILE_BYTES * 2));
+/** Most files listed to the wiki, diffed and left out alike. */
+const MAX_LISTED_FILES = 2000;
+
+/** The push as the wiki's CI endpoint takes it, with the diffs fitted into `maxBytes`. */
+export function runPayload(change: Change, maxBytes: number) {
+  const { text, cut } = fitDiffs(change.files, maxBytes);
   const note = cut.length ? `\n[Diff cut to fit ${maxBytes} bytes: ${cut.join('; ')}. Document only what the diff shows.]\n` : '';
-  return { text: `${header}${text}${note}`, cut };
+  const files = [
+    ...change.files.map(({ path, added, deleted }) => ({ path, added, deleted })),
+    ...change.skipped.map(({ path, reason }) => ({ path, skipped: reason })),
+  ].slice(0, MAX_LISTED_FILES);
+  return {
+    sha: change.range.head,
+    note: [change.range.base === EMPTY_TREE ? 'from the first commit' : `since ${change.range.base.slice(0, 7)}`, change.range.note].filter(Boolean).join('; '),
+    commits: change.commits.map((commit) => ({ ...commit, author: commit.author.slice(0, 200) })),
+    files,
+    diff: `${text}${note}`,
+    cut,
+  };
 }

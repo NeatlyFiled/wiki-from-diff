@@ -2,7 +2,7 @@
   "name": "@agent-wiki/wiki-from-diff",
   "version": "0.1.0",
   "private": true,
-  "description": "GitHub Action: a Claude agent documents each push in a Neatlyfiled wiki. No dependencies: GitHub runs src/main.ts as is.",
+  "description": "GitHub Action: a Neatlyfiled wiki documents each push, authenticated by GitHub OIDC. No dependencies: GitHub runs src/main.ts as is.",
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit && npm test",

@@ -1,72 +1,57 @@
 # wiki-from-diff
 
 A GitHub Action that keeps your [Neatlyfiled](https://neatlyfiled.com) wiki in
-step with your code. On each push it hands the push's diff to a Claude agent
-(on your Anthropic API key). The agent reads your wiki, updates the pages that
-document what changed (APIs, configuration, architecture, data models,
-runbooks), and the action saves all of its edits as **one wiki revision per
-push**, linked to the commit.
+step with your code. On each push it sends the push's diff to your wiki, whose
+agent reads the wiki, updates the pages that document what changed (APIs,
+configuration, architecture, data models, runbooks) and saves all of its edits
+as **one wiki revision per push**, linked to the commit.
 
-- Edits are staged while the agent works and sent together at the end, so a
-  failed or cancelled run leaves the wiki untouched.
+- **No secrets.** The job proves which repository it runs in with GitHub's
+  OIDC token; your wiki accepts pushes only from repositories an admin has
+  connected. There is no wiki token or model key to store.
 - The agent prefers section edits, keeps each page's style, creates pages only
   for genuinely new concepts, and makes no edits when nothing needs updating.
-- Re-running a job never writes twice: the revision is keyed to the commit.
+- Edits are saved together at the end, so a failed run leaves the wiki
+  untouched, and re-running a job never writes twice: the revision is keyed to
+  the commit, and a documented push is not sent to the model again.
 
 ## Setup
 
-1. In the wiki, create a **write** token: **Admin → Agent tokens**. Save it as
-   the repository secret `NEATLYFILED_WIKI_TOKEN`.
-2. Save your Anthropic API key as the secret `ANTHROPIC_API_KEY`.
-3. Add the workflow:
+1. In the wiki, open **Admin → Connected repositories** and add your
+   repository (`owner/repo`). The page shows this workflow with your wiki
+   filled in.
+2. Add the workflow:
 
 ```yaml
 # .github/workflows/wiki.yml
 name: Wiki docs
-
 on:
   push:
     branches: [main]
-
 permissions:
   contents: read
-
-concurrency:
-  group: wiki-docs
-  cancel-in-progress: false
-
+  id-token: write # lets the job prove to the wiki which repository it is
 jobs:
-  docs:
+  wiki:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # the action diffs the push, so it needs the history
-      - uses: ChristianBako/agent-wiki/actions/wiki-from-diff@main
+      - uses: neatlyfiled/wiki-from-diff@v1
         with:
-          wiki-url: https://acme.neatlyfiled.com
-          wiki-token: ${{ secrets.NEATLYFILED_WIKI_TOKEN }}
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          folder: engineering/api # optional
+          wiki: acme # your subdomain, or the wiki's full https address
 ```
-
-The job needs only `contents: read`: the action reads the checkout and talks
-to the wiki and the Anthropic API with the tokens you give it. The
-`concurrency` group runs one docs job at a time, so pushes are documented in
-order and do not edit the same pages at once.
 
 ## Inputs
 
 | Input | Default | Does |
 | --- | --- | --- |
-| `wiki-url` | required | The wiki, e.g. `https://acme.neatlyfiled.com` |
-| `wiki-token` | required | A write token (`awt_…`) |
-| `anthropic-api-key` | required | Your Anthropic API key |
-| `model` | see `DEFAULT_MODEL` in `src/agent.ts` | The Claude model the agent uses |
+| `wiki` | required | Your wiki: its subdomain (`acme` for `https://acme.neatlyfiled.com`) or its address |
 | `folder` | | Where this repository's pages live; the agent looks there first and puts new pages there |
 | `instructions` | | Extra guidance for the agent, e.g. "keep docs/runbooks/ current; never edit the changelog" |
 | `ignore` | | Globs (one per line or comma-separated) to leave out of the diff, on top of the built-in ones: lockfiles, `dist/`, `build/`, `out/`, `coverage/`, `vendor/`, `node_modules/`, minified, source maps, snapshots, generated code and binary files |
-| `max-diff-bytes` | `120000` | Most bytes of diff the agent sees; bigger diffs are cut per file (small files stay whole) with a note of what was cut |
+| `max-diff-bytes` | `120000` | Most bytes of diff sent; bigger diffs are cut per file (small files stay whole) with a note of what was cut |
 | `dry-run` | `false` | `true` runs the agent and prints the planned revision without saving it |
 
 Globs work like `.gitignore`: `docs/` matches a folder anywhere, `*.svg` a file
@@ -80,8 +65,8 @@ name anywhere, `api/legacy/**` a path from the repository root.
 | `pages` | The pages changed, one path per line |
 | `skipped` | Why no revision was saved, if none was: `dry-run`, no documentable changes, a `[skip wiki]` commit, or nothing to update |
 
-Each run also writes a job summary with links to the changed pages and the
-revision, or why it skipped.
+Each run also prints the agent's summary and writes a job summary with the
+changed pages and a link to the revision, or why it skipped.
 
 ## What gets documented
 
@@ -91,31 +76,35 @@ revision, or why it skipped.
 - **A force push**: the new commits since the old and new histories split.
 - **`workflow_dispatch`**: the last commit.
 
-The agent sees the commit messages, the list of changed files and the diff.
-It does not see the rest of your code, so it documents only what the diff
-shows.
+The wiki gets the commit messages, the list of changed files and the diff, not
+the rest of your code, so the agent documents only what the diff shows.
 
 ## Skipping a push
 
 Put `[skip wiki]` in any commit message of the push. The action then stops
-before calling the model. (`[skip ci]` skips the whole workflow, as usual.)
+before sending anything. (`[skip ci]` skips the whole workflow, as usual.)
 
-## Cost
+## Usage and limits
 
-Every documented push is a conversation with Claude on your Anthropic API key:
-the diff (up to `max-diff-bytes`, about 30k tokens at the default), the pages
-the agent reads, and the pages it writes, over up to 30 model turns. The
-action caches the prompt between turns to keep repeated input cheap. Pushes
-skipped by `[skip wiki]` or with only ignored files cost nothing; lower
-`max-diff-bytes` or choose a smaller `model` to spend less. A re-run of a
-documented push asks the model again but saves nothing new.
+The agent's model usage is included in your Neatlyfiled plan. Each wiki takes
+a limited number of CI runs a day (50 by default); pushes skipped with
+`[skip wiki]`, pushes that change only ignored files and re-runs of a
+documented push do not count. A locked wiki (trial or subscription ended)
+refuses runs until it is renewed. Recent runs, with their outcome and token
+usage, are listed under Admin → Connected repositories.
 
 ## Errors
 
+- **`id-token: write` missing**: GitHub gives the job no OIDC token; add the
+  permission.
 - **Missing commits**: check out with `fetch-depth: 0`.
+- **`repository_not_connected` (403)**: connect the repository in the wiki's
+  admin page (the name must match `owner/repo`).
 - **Broken links** in the agent's pages: the agent gets the wiki's list once to
-  fix them, then the action retries.
+  fix them before saving.
 - **Conflict**: someone edited the same lines while the agent worked; re-run
   the job.
-- **Rate limits** (wiki or Anthropic): the action waits and retries.
-- **Wiki locked or full** (402, 413): the job fails with the wiki's message.
+- **`rate_limited` (429)**: the wiki's daily CI runs are used up.
+- **`locked` (402)**: the wiki's trial or subscription has ended.
+- The action waits up to 10 minutes for a run; a longer run still finishes in
+  the wiki.

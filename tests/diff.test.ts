@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { BUILTIN_IGNORES, collect, describe, EMPTY_TREE, fitDiffs, ignored, pickRange, type History } from '../src/diff.ts';
+import { BUILTIN_IGNORES, collect, EMPTY_TREE, fitDiffs, ignored, pickRange, runPayload, type History } from '../src/diff.ts';
 
 const ZERO = '0'.repeat(40);
 
@@ -77,7 +77,7 @@ test('fitDiffs keeps small diffs whole and cuts big ones at a line end', () => {
   assert.deepEqual(tight.cut, ['big.ts (left out)', 'huge.ts (left out)']);
 });
 
-test('collect and describe a real repository: ignored and binary files are listed, not diffed', (t) => {
+test('collect a real repository and build the run payload: ignored and binary files are listed, not diffed', (t) => {
   const dir = mkdtempSync(path.join(tmpdir(), 'wfd-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@x', ...args], { cwd: dir, encoding: 'utf8' }).trim();
@@ -96,8 +96,11 @@ test('collect and describe a real repository: ignored and binary files are liste
   assert.deepEqual(change.commits.map((commit) => commit.message), ['Bump a\n\nBecause.']);
   assert.deepEqual(change.files.map((file) => [file.path, file.added, file.deleted]), [['api.ts', 1, 1]]);
   assert.deepEqual(change.skipped, [{ path: 'logo.png', reason: 'binary' }, { path: 'package-lock.json', reason: 'ignored' }]);
-  const { text } = describe(change, 120_000);
-  assert.match(text, /- api\.ts \(\+1 −1\)/);
-  assert.match(text, /\+export const a = 2;/);
-  assert.doesNotMatch(text, /\{\}/);
+  const payload = runPayload(change, 120_000);
+  assert.equal(payload.sha, head);
+  assert.equal(payload.note, `since ${base.slice(0, 7)}`);
+  assert.deepEqual(payload.files, [{ path: 'api.ts', added: 1, deleted: 1 }, { path: 'logo.png', skipped: 'binary' }, { path: 'package-lock.json', skipped: 'ignored' }]);
+  assert.match(payload.diff, /\+export const a = 2;/);
+  assert.doesNotMatch(payload.diff, /\{\}/);
+  assert.deepEqual(payload.cut, []);
 });
